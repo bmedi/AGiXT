@@ -54,3 +54,7 @@ onnx/
 text-generation-webui/
 # testing
 **/.ipynb_checkpoints/
+docs/.DS_Store
+agixt/.DS_Store
+.github/.DS_Store
+.DS_Store
