@@ -1,3 +1,4 @@
+version: "3.7"
 services:
   db:
     image: postgres
@@ -22,10 +23,7 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-postgres}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - UVICORN_WORKERS=${UVICORN_WORKERS:-10}
-      - AGIXT_HUB=${AGIXT_HUB:-AGiXT/hub}
       - AGIXT_API_KEY=${AGIXT_API_KEY}
-      - GITHUB_USER=${GITHUB_USER}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
       - TOKENIZERS_PARALLELISM=False
     ports:
       - "7437:7437"
@@ -50,6 +48,17 @@ services:
       - ./agixt/WORKSPACE:/app/WORKSPACE
     ports:
       - "8501:8501"
+  nextjs:
+    image: joshxt/agixt-nextjs:main
+    depends_on:
+      - agixt
+    environment:
+      - NEXT_PUBLIC_API_URL=${AGIXT_URI:-http://agixt:7437}
+      - NEXT_PUBLIC_API_KEY=${AGIXT_API_KEY}
+    ports:
+      - "24498:24498"
+    volumes:
+      - ./agixt/WORKSPACE:/app/WORKSPACE
   text-generation-webui:
     build:
       context: text-generation-webui/.

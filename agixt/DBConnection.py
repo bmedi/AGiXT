@@ -1,5 +1,7 @@
 import os
 import uuid
+import time
+import logging
 from sqlalchemy import (
     create_engine,
     Column,
@@ -16,27 +18,55 @@ from sqlalchemy.sql import text
 from dotenv import load_dotenv
 
 load_dotenv()
-
-
-username = os.getenv("POSTGRES_USER", "postgres")
-password = os.getenv("POSTGRES_PASSWORD", "postgres")
-server = os.getenv("POSTGRES_SERVER", "localhost")
-port = os.getenv("POSTGRES_PORT", "5432")
-database_name = os.getenv("POSTGRES_DB", "postgres")
-db_connected = True if os.getenv("DB_CONNECTED", "false").lower() == "true" else False
-Base = declarative_base()
-if db_connected:
-    try:
-        engine = create_engine(
-            f"postgresql://{username}:{password}@{server}:{port}/{database_name}"
+DB_CONNECTED = True if os.getenv("DB_CONNECTED", "false").lower() == "true" else False
+if DB_CONNECTED:
+    DATABASE_TYPE = os.getenv("DATABASE_TYPE", "sqlite")
+    DATABASE_USER = os.getenv("DATABASE_USER", os.getenv("POSTGRES_USER", "postgres"))
+    DATABASE_PASSWORD = os.getenv(
+        "DATABASE_PASSWORD", os.getenv("POSTGRES_PASSWORD", "postgres")
+    )
+    DATABASE_HOST = os.getenv(
+        "DATABASE_HOST", os.getenv("POSTGRES_SERVER", "localhost")
+    )
+    DATABASE_PORT = os.getenv("DATABASE_PORT", os.getenv("POSTGRES_PORT", "5432"))
+    DATABASE_NAME = os.getenv("DATABASE_NAME", os.getenv("POSTGRES_DB", "postgres"))
+    LOGIN_URI = f"{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}:{DATABASE_PORT}/{DATABASE_NAME}"
+    DATABASE_URL = f"postgresql://{LOGIN_URI}"
+    if DATABASE_TYPE == "mssql":
+        DATABASE_URL = (
+            f"mssql+pyodbc://{LOGIN_URI}?driver=ODBC+Driver+17+for+SQL+Server"
         )
+    elif DATABASE_TYPE == "mysql":
+        DATABASE_URL = f"mysql://{LOGIN_URI}"
+    elif DATABASE_TYPE == "sqlite":
+        if "/" not in DATABASE_NAME:
+            if not os.path.exists(f"{os.getcwd()}/data"):
+                os.makedirs(f"{os.getcwd()}/data")
+            DATABASE_NAME = f"{os.getcwd()}/data/{DATABASE_NAME}"
+        DATABASE_URL = f"sqlite:///{DATABASE_NAME}.db"
+    elif DATABASE_TYPE == "oracle":
+        DATABASE_URL = f"oracle://{LOGIN_URI}"
+    try:
+        engine = create_engine(DATABASE_URL)
     except Exception as e:
-        print(f"Error connecting to database: {e}")
-    Session = sessionmaker(bind=engine)
-    session = Session()
+        logging.error(f"Error connecting to database: {e}")
     connection = engine.connect()
+    Base = declarative_base()
 else:
-    session = None
+    Base = None
+    engine = None
+
+
+def get_session():
+    Session = sessionmaker(bind=engine, autoflush=False)
+    session = Session()
+    return session
+
+
+class User(Base):
+    __tablename__ = "user"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String, default="USER", unique=True)
 
 
 class Provider(Base):
@@ -51,9 +81,7 @@ class ProviderSetting(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     provider_id = Column(UUID(as_uuid=True), ForeignKey("provider.id"), nullable=False)
     name = Column(Text, nullable=False)
-    value = Column(
-        Text
-    )  # Add the 'value' column without the 'nullable=False' constraint
+    value = Column(Text)
 
 
 class AgentProviderSetting(Base):
@@ -83,7 +111,9 @@ class Agent(Base):
     provider_id = Column(
         UUID(as_uuid=True), ForeignKey("provider.id"), nullable=True, default=None
     )
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
     settings = relationship("AgentSetting", backref="agent")  # One-to-many relationship
+    user = relationship("User", backref="agent")
 
 
 class Command(Base):
@@ -108,6 +138,8 @@ class Conversation(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     agent_id = Column(UUID(as_uuid=True), ForeignKey("agent.id"), nullable=False)
     name = Column(Text, nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
+    user = relationship("User", backref="conversation")
 
 
 class Message(Base):
@@ -142,6 +174,7 @@ class Chain(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
     steps = relationship(
         "ChainStep",
         backref="chain",
@@ -152,6 +185,7 @@ class Chain(Base):
     target_steps = relationship(
         "ChainStep", backref="target_chain", foreign_keys="ChainStep.target_chain_id"
     )
+    user = relationship("User", backref="chain")
 
 
 class ChainStep(Base):
@@ -178,6 +212,7 @@ class ChainStep(Base):
     )
 
     def add_response(self, content):
+        session = get_session()
         response = ChainStepResponse(content=content, chain_step=self)
         session.add(response)
         session.commit()
@@ -228,6 +263,8 @@ class PromptCategory(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
+    user = relationship("User", backref="prompt_category")
 
 
 class Prompt(Base):
@@ -239,9 +276,18 @@ class Prompt(Base):
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=False)
     content = Column(Text, nullable=False)
-
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=True)
     prompt_category = relationship("PromptCategory", backref="prompts")
+    user = relationship("User", backref="prompt")
 
 
 if __name__ == "__main__":
-    Base.metadata.create_all(engine)
+    if DB_CONNECTED:
+        logging.info("Connecting to database...")
+        time.sleep(10)
+        Base.metadata.create_all(engine)
+        logging.info("Connected to database.")
+        # Check if the user table is empty
+        from db.imports import import_all_data
+
+        import_all_data()

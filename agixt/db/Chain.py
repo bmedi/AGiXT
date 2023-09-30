@@ -1,5 +1,5 @@
 from DBConnection import (
-    session,
+    get_session,
     Chain as ChainDB,
     ChainStep,
     ChainStepResponse,
@@ -8,18 +8,32 @@ from DBConnection import (
     ChainStepArgument,
     Prompt,
     Command,
+    User,
 )
 
 
 class Chain:
+    def __init__(self, user="USER"):
+        self.session = get_session()
+        self.user = user
+        user_data = self.session.query(User).filter(User.email == self.user).first()
+        self.user_id = user_data.id
+
     def get_chain(self, chain_name):
         chain_name = chain_name.replace("%20", " ")
-        chain_db = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain_db = (
+            self.session.query(ChainDB)
+            .filter(
+                ChainDB.name == chain_name,
+                ChainDB.user_id == self.user_id,
+            )
+            .first()
+        )
         if chain_db is None:
             return None
 
         chain_steps = (
-            session.query(ChainStep)
+            self.session.query(ChainStep)
             .filter(ChainStep.chain_id == chain_db.id)
             .order_by(ChainStep.step_number)
             .all()
@@ -27,24 +41,24 @@ class Chain:
 
         steps = []
         for step in chain_steps:
-            agent_name = session.query(Agent).get(step.agent_id).name
+            agent_name = self.session.query(Agent).get(step.agent_id).name
             prompt = {}
             if step.target_chain_id:
                 prompt["chain_name"] = (
-                    session.query(ChainDB).get(step.target_chain_id).name
+                    self.session.query(ChainDB).get(step.target_chain_id).name
                 )
             elif step.target_command_id:
                 prompt["command_name"] = (
-                    session.query(Command).get(step.target_command_id).name
+                    self.session.query(Command).get(step.target_command_id).name
                 )
             elif step.target_prompt_id:
                 prompt["prompt_name"] = (
-                    session.query(Prompt).get(step.target_prompt_id).name
+                    self.session.query(Prompt).get(step.target_prompt_id).name
                 )
 
             # Retrieve argument data for the step
             arguments = (
-                session.query(Argument, ChainStepArgument)
+                self.session.query(Argument, ChainStepArgument)
                 .join(ChainStepArgument, ChainStepArgument.argument_id == Argument.id)
                 .filter(ChainStepArgument.chain_step_id == step.id)
                 .all()
@@ -72,27 +86,49 @@ class Chain:
         return chain_data
 
     def get_chains(self):
-        chains = session.query(ChainDB).all()
+        chains = (
+            self.session.query(ChainDB).filter(ChainDB.user_id == self.user_id).all()
+        )
         return [chain.name for chain in chains]
 
     def add_chain(self, chain_name):
         chain = ChainDB(name=chain_name)
-        session.add(chain)
-        session.commit()
+        self.session.add(chain)
+        self.session.commit()
 
     def rename_chain(self, chain_name, new_name):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
         chain.name = new_name
-        session.commit()
+        self.session.commit()
 
     def add_chain_step(self, chain_name, step_number, agent_name, prompt_type, prompt):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
-        agent = session.query(Agent).filter(Agent.name == agent_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
+        agent = (
+            self.session.query(Agent)
+            .filter(Agent.name == agent_name, Agent.user_id == self.user_id)
+            .first()
+        )
+        if "prompt_category" in prompt:
+            prompt_category = prompt["prompt_category"]
+        else:
+            prompt_category = "Default"
         if "prompt_name" in prompt:
             argument_key = "prompt_name"
             target_id = (
-                session.query(Prompt)
-                .filter(Prompt.name == prompt["prompt_name"])
+                self.session.query(Prompt)
+                .filter(
+                    Prompt.name == prompt["prompt_name"],
+                    Prompt.user_id == self.user_id,
+                    Prompt.prompt_category.has(name=prompt_category),
+                )
                 .first()
                 .id
             )
@@ -100,8 +136,10 @@ class Chain:
         elif "chain_name" in prompt:
             argument_key = "chain_name"
             target_id = (
-                session.query(Chain)
-                .filter(Chain.name == prompt["chain_name"])
+                self.session.query(Chain)
+                .filter(
+                    Chain.name == prompt["chain_name"], Chain.user_id == self.user_id
+                )
                 .first()
                 .id
             )
@@ -109,7 +147,7 @@ class Chain:
         elif "command_name" in prompt:
             argument_key = "command_name"
             target_id = (
-                session.query(Command)
+                self.session.query(Command)
                 .filter(Command.name == prompt["command_name"])
                 .first()
                 .id
@@ -130,12 +168,14 @@ class Chain:
             target_command_id=target_id if target_type == "command" else None,
             target_prompt_id=target_id if target_type == "prompt" else None,
         )
-        session.add(chain_step)
-        session.commit()
+        self.session.add(chain_step)
+        self.session.commit()
 
         for argument_name, argument_value in prompt_arguments.items():
             argument = (
-                session.query(Argument).filter(Argument.name == argument_name).first()
+                self.session.query(Argument)
+                .filter(Argument.name == argument_name)
+                .first()
             )
             if not argument:
                 # Handle the case where argument not found based on argument_name
@@ -147,20 +187,28 @@ class Chain:
                 argument_id=argument.id,
                 value=argument_value,
             )
-            session.add(chain_step_argument)
-            session.commit()
+            self.session.add(chain_step_argument)
+            self.session.commit()
 
     def update_step(self, chain_name, step_number, agent_name, prompt_type, prompt):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
         chain_step = (
-            session.query(ChainStep)
+            self.session.query(ChainStep)
             .filter(
                 ChainStep.chain_id == chain.id, ChainStep.step_number == step_number
             )
             .first()
         )
 
-        agent = session.query(Agent).filter(Agent.name == agent_name).first()
+        agent = (
+            self.session.query(Agent)
+            .filter(Agent.name == agent_name, Agent.user_id == self.user_id)
+            .first()
+        )
         agent_id = agent.id if agent else None
 
         target_chain_id = None
@@ -172,16 +220,23 @@ class Chain:
             command_args = prompt.copy()
             del command_args["command_name"]
             command = (
-                session.query(Command).filter(Command.name == command_name).first()
+                self.session.query(Command).filter(Command.name == command_name).first()
             )
             if command:
                 target_command_id = command.id
         elif prompt_type == "Prompt":
             prompt_name = prompt.get("prompt_name")
+            prompt_category = prompt_name = prompt.get("prompt_name", "Default")
             prompt_args = prompt.copy()
             del prompt_args["prompt_name"]
             prompt_obj = (
-                session.query(Prompt).filter(Prompt.name == prompt_name).first()
+                self.session.query(Prompt)
+                .filter(
+                    Prompt.name == prompt_name,
+                    Prompt.prompt_category.has(name=prompt_category),
+                    Prompt.user_id == self.user_id,
+                )
+                .first()
             )
             if prompt_obj:
                 target_prompt_id = prompt_obj.id
@@ -190,7 +245,9 @@ class Chain:
             chain_args = prompt.copy()
             del chain_args["chain_name"]
             chain_obj = (
-                session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+                self.session.query(ChainDB)
+                .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+                .first()
             )
             if chain_obj:
                 target_chain_id = chain_obj.id
@@ -202,16 +259,18 @@ class Chain:
         chain_step.target_command_id = target_command_id
         chain_step.target_prompt_id = target_prompt_id
 
-        session.commit()
+        self.session.commit()
 
         # Update the arguments for the step
-        session.query(ChainStepArgument).filter(
+        self.session.query(ChainStepArgument).filter(
             ChainStepArgument.chain_step_id == chain_step.id
         ).delete()
 
         for argument_name, argument_value in prompt_args.items():
             argument = (
-                session.query(Argument).filter(Argument.name == argument_name).first()
+                self.session.query(Argument)
+                .filter(Argument.name == argument_name)
+                .first()
             )
             if argument:
                 chain_step_argument = ChainStepArgument(
@@ -219,23 +278,29 @@ class Chain:
                     argument_id=argument.id,
                     value=argument_value,
                 )
-                session.add(chain_step_argument)
-                session.commit()
+                self.session.add(chain_step_argument)
+                self.session.commit()
 
     def delete_step(self, chain_name, step_number):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
 
         if chain:
             chain_step = (
-                session.query(ChainStep)
+                self.session.query(ChainStep)
                 .filter(
                     ChainStep.chain_id == chain.id, ChainStep.step_number == step_number
                 )
                 .first()
             )
             if chain_step:
-                session.delete(chain_step)  # Remove the chain step from the session
-                session.commit()
+                self.session.delete(
+                    chain_step
+                )  # Remove the chain step from the session
+                self.session.commit()
             else:
                 print(
                     f"No step found with number {step_number} in chain '{chain_name}'"
@@ -244,14 +309,22 @@ class Chain:
             print(f"No chain found with name '{chain_name}'")
 
     def delete_chain(self, chain_name):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
-        session.delete(chain)
-        session.commit()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
+        self.session.delete(chain)
+        self.session.commit()
 
     def get_step(self, chain_name, step_number):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
         chain_step = (
-            session.query(ChainStep)
+            self.session.query(ChainStep)
             .filter(
                 ChainStep.chain_id == chain.id, ChainStep.step_number == step_number
             )
@@ -260,9 +333,13 @@ class Chain:
         return chain_step
 
     def get_steps(self, chain_name):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
         chain_steps = (
-            session.query(ChainStep)
+            self.session.query(ChainStep)
             .filter(ChainStep.chain_id == chain.id)
             .order_by(ChainStep.step_number)
             .all()
@@ -270,9 +347,13 @@ class Chain:
         return chain_steps
 
     def move_step(self, chain_name, current_step_number, new_step_number):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
         chain_step = (
-            session.query(ChainStep)
+            self.session.query(ChainStep)
             .filter(
                 ChainStep.chain_id == chain.id,
                 ChainStep.step_number == current_step_number,
@@ -281,7 +362,7 @@ class Chain:
         )
         chain_step.step_number = new_step_number
         if new_step_number < current_step_number:
-            session.query(ChainStep).filter(
+            self.session.query(ChainStep).filter(
                 ChainStep.chain_id == chain.id,
                 ChainStep.step_number >= new_step_number,
                 ChainStep.step_number < current_step_number,
@@ -289,21 +370,25 @@ class Chain:
                 {"step_number": ChainStep.step_number + 1}, synchronize_session=False
             )
         else:
-            session.query(ChainStep).filter(
+            self.session.query(ChainStep).filter(
                 ChainStep.chain_id == chain.id,
                 ChainStep.step_number > current_step_number,
                 ChainStep.step_number <= new_step_number,
             ).update(
                 {"step_number": ChainStep.step_number - 1}, synchronize_session=False
             )
-        session.commit()
+        self.session.commit()
 
     def get_step_response(self, chain_name, step_number="all"):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
 
         if step_number == "all":
             chain_steps = (
-                session.query(ChainStep)
+                self.session.query(ChainStep)
                 .filter(ChainStep.chain_id == chain.id)
                 .order_by(ChainStep.step_number)
                 .all()
@@ -312,7 +397,7 @@ class Chain:
             responses = {}
             for step in chain_steps:
                 chain_step_responses = (
-                    session.query(ChainStepResponse)
+                    self.session.query(ChainStepResponse)
                     .filter(ChainStepResponse.chain_step_id == step.id)
                     .order_by(ChainStepResponse.timestamp)
                     .all()
@@ -323,7 +408,7 @@ class Chain:
             return responses
         else:
             chain_step = (
-                session.query(ChainStep)
+                self.session.query(ChainStep)
                 .filter(
                     ChainStep.chain_id == chain.id, ChainStep.step_number == step_number
                 )
@@ -332,7 +417,7 @@ class Chain:
 
             if chain_step:
                 chain_step_responses = (
-                    session.query(ChainStepResponse)
+                    self.session.query(ChainStepResponse)
                     .filter(ChainStepResponse.chain_step_id == chain_step.id)
                     .order_by(ChainStepResponse.timestamp)
                     .all()
@@ -343,9 +428,13 @@ class Chain:
                 return None
 
     def get_chain_responses(self, chain_name):
-        chain = session.query(ChainDB).filter(ChainDB.name == chain_name).first()
+        chain = (
+            self.session.query(ChainDB)
+            .filter(ChainDB.name == chain_name, ChainDB.user_id == self.user_id)
+            .first()
+        )
         chain_steps = (
-            session.query(ChainStep)
+            self.session.query(ChainStep)
             .filter(ChainStep.chain_id == chain.id)
             .order_by(ChainStep.step_number)
             .all()
@@ -353,7 +442,7 @@ class Chain:
         responses = {}
         for step in chain_steps:
             chain_step_responses = (
-                session.query(ChainStepResponse)
+                self.session.query(ChainStepResponse)
                 .filter(ChainStepResponse.chain_step_id == step.id)
                 .order_by(ChainStepResponse.timestamp)
                 .all()
@@ -363,14 +452,18 @@ class Chain:
         return responses
 
     def import_chain(self, chain_name: str, steps: dict):
-        chain = ChainDB(name=chain_name)
-        session.add(chain)
-        session.commit()
+        chain = ChainDB(name=chain_name, user_id=self.user_id)
+        self.session.add(chain)
+        self.session.commit()
 
         steps = steps["steps"] if "steps" in steps else steps
         for step_data in steps:
             agent_name = step_data["agent_name"]
-            agent = session.query(Agent).filter(Agent.name == agent_name).first()
+            agent = (
+                self.session.query(Agent)
+                .filter(Agent.name == agent_name, Agent.user_id == self.user_id)
+                .first()
+            )
             if not agent:
                 # Handle the case where agent not found based on agent_name
                 # You can choose to skip this step or raise an exception
@@ -379,9 +472,14 @@ class Chain:
             prompt = step_data["prompt"]
             if "prompt_name" in prompt:
                 argument_key = "prompt_name"
+                prompt_category = prompt.get("prompt_category", "Default")
                 target_id = (
-                    session.query(Prompt)
-                    .filter(Prompt.name == prompt["prompt_name"])
+                    self.session.query(Prompt)
+                    .filter(
+                        Prompt.name == prompt["prompt_name"],
+                        Prompt.user_id == self.user_id,
+                        Prompt.prompt_category.has(name=prompt_category),
+                    )
                     .first()
                     .id
                 )
@@ -389,8 +487,11 @@ class Chain:
             elif "chain_name" in prompt:
                 argument_key = "chain_name"
                 target_id = (
-                    session.query(Chain)
-                    .filter(Chain.name == prompt["chain_name"])
+                    self.session.query(Chain)
+                    .filter(
+                        Chain.name == prompt["chain_name"],
+                        Chain.user_id == self.user_id,
+                    )
                     .first()
                     .id
                 )
@@ -398,7 +499,7 @@ class Chain:
             elif "command_name" in prompt:
                 argument_key = "command_name"
                 target_id = (
-                    session.query(Command)
+                    self.session.query(Command)
                     .filter(Command.name == prompt["command_name"])
                     .first()
                     .id
@@ -423,12 +524,12 @@ class Chain:
                 target_command_id=target_id if target_type == "command" else None,
                 target_prompt_id=target_id if target_type == "prompt" else None,
             )
-            session.add(chain_step)
-            session.commit()
+            self.session.add(chain_step)
+            self.session.commit()
 
             for argument_name, argument_value in prompt_arguments.items():
                 argument = (
-                    session.query(Argument)
+                    self.session.query(Argument)
                     .filter(Argument.name == argument_name)
                     .first()
                 )
@@ -442,8 +543,8 @@ class Chain:
                     argument_id=argument.id,
                     value=argument_value,
                 )
-                session.add(chain_step_argument)
-                session.commit()
+                self.session.add(chain_step_argument)
+                self.session.commit()
 
         return f"Chain '{chain_name}' imported."
 
@@ -515,5 +616,5 @@ class Chain:
                 "content": step_data["response"],
             }
             chain_step_response = ChainStepResponse(**response_content)
-            session.add(chain_step_response)
-            session.commit()
+            self.session.add(chain_step_response)
+            self.session.commit()

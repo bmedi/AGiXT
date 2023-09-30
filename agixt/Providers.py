@@ -4,6 +4,8 @@ import pkg_resources
 import glob
 import os
 import inspect
+import logging
+from Defaults import DEFAULT_SETTINGS
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,31 +27,41 @@ def get_provider_options(provider_name):
     provider_name = provider_name.lower()
     if provider_name in DISABLED_PROVIDERS:
         return {}
-    try:
-        module = importlib.import_module(f"providers.{provider_name}")
-        provider_class = getattr(module, f"{provider_name.capitalize()}Provider")
-        signature = inspect.signature(provider_class.__init__)
-        options = {
-            name: param.default
-            if param.default is not inspect.Parameter.empty
-            else None
-            for name, param in signature.parameters.items()
-            if name != "self" and name != "kwargs"
-        }
+    logging.info(f"Getting options for provider: {provider_name}")
+    # This will keep transformers from being installed unless needed.
+    if provider_name == "pipeline":
+        options = DEFAULT_SETTINGS.copy()
         options["provider"] = provider_name
-    except:
-        options = {
-            "provider": provider_name,
-            "MAX_TOKENS": 4096,
-            "AI_MODEL": "gpt-3.5-turbo",
-            "AI_TOP_P": 0.7,
-            "AI_TEMPERATURE": 0.7,
-            "WAIT_BETWEEN_REQUESTS": 1,
-            "WAIT_AFTER_FAILURE": 3,
-        }
-        if provider_name == "petal" or provider_name == "pipeline":
-            options["HUGGINGFACE_API_KEY"] = ""
+        options["HUGGINGFACE_API_KEY"] = ""
+        options["MODEL_PATH"] = ""
+    else:
+        try:
+            module = importlib.import_module(f"providers.{provider_name}")
+            provider_class = getattr(module, f"{provider_name.capitalize()}Provider")
+            signature = inspect.signature(provider_class.__init__)
+            options = {
+                name: param.default
+                if param.default is not inspect.Parameter.empty
+                else None
+                for name, param in signature.parameters.items()
+                if name != "self" and name != "kwargs"
+            }
+        except:
+            pass
+    if "prodiver" not in options:
+        options["provider"] = provider_name
     return options
+
+
+def get_providers_with_settings():
+    providers = []
+    for provider in get_providers():
+        providers.append(
+            {
+                provider: get_provider_options(provider_name=provider),
+            }
+        )
+    return providers
 
 
 class Providers:

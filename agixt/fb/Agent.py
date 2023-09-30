@@ -6,26 +6,10 @@ import importlib
 from inspect import signature, Parameter
 from Providers import Providers
 from Extensions import Extensions
-
-DEFAULT_SETTINGS = {
-    "provider": "gpt4free",
-    "embedder": "default",
-    "AI_MODEL": "gpt-3.5-turbo",
-    "AI_TEMPERATURE": "0.7",
-    "AI_TOP_P": "1",
-    "MAX_TOKENS": "4096",
-    "helper_agent_name": "gpt4free",
-    "WEBSEARCH_TIMEOUT": 0,
-    "WAIT_BETWEEN_REQUESTS": 1,
-    "WAIT_AFTER_FAILURE": 3,
-    "stream": False,
-    "WORKING_DIRECTORY": "./WORKSPACE",
-    "WORKING_DIRECTORY_RESTRICTED": True,
-    "AUTONOMOUS_EXECUTION": False,
-}
+from Defaults import DEFAULT_SETTINGS
 
 
-def get_agent_file_paths(agent_name):
+def get_agent_file_paths(agent_name, user="USER"):
     base_path = os.path.join(os.getcwd(), "agents")
     folder_path = os.path.normpath(os.path.join(base_path, agent_name))
     config_path = os.path.normpath(os.path.join(folder_path, "config.json"))
@@ -36,7 +20,7 @@ def get_agent_file_paths(agent_name):
     return config_path, folder_path
 
 
-def add_agent(agent_name, provider_settings=None, commands={}):
+def add_agent(agent_name, provider_settings=None, commands={}, user="USER"):
     if not agent_name:
         return "Agent name cannot be empty."
     provider_settings = (
@@ -59,7 +43,7 @@ def add_agent(agent_name, provider_settings=None, commands={}):
     return {"message": f"Agent {agent_name} created."}
 
 
-def delete_agent(agent_name):
+def delete_agent(agent_name, user="USER"):
     config_path, folder_path = get_agent_file_paths(agent_name=agent_name)
     try:
         if os.path.exists(folder_path):
@@ -69,7 +53,7 @@ def delete_agent(agent_name):
         return {"message": f"Agent {agent_name} could not be deleted."}, 400
 
 
-def rename_agent(agent_name, new_name):
+def rename_agent(agent_name, new_name, user="USER"):
     config_path, folder_path = get_agent_file_paths(agent_name=agent_name)
     base_path = os.path.join(os.getcwd(), "agents")
     new_agent_folder = os.path.normpath(os.path.join(base_path, new_name))
@@ -91,7 +75,7 @@ def rename_agent(agent_name, new_name):
         return {"message": f"Agent {agent_name} renamed to {new_name}."}, 200
 
 
-def get_agents():
+def get_agents(user="USER"):
     agents_dir = "agents"
     if not os.path.exists(agents_dir):
         os.makedirs(agents_dir)
@@ -108,7 +92,8 @@ def get_agents():
 
 
 class Agent:
-    def __init__(self, agent_name=None):
+    def __init__(self, agent_name=None, user="USER"):
+        self.USER = user
         self.agent_name = agent_name if agent_name is not None else "AGiXT"
         self.config_path, self.folder_path = get_agent_file_paths(
             agent_name=self.agent_name
@@ -194,6 +179,8 @@ class Agent:
             lambda command: f"`{command['friendly_name']}` - Arguments: {command['args']}",
             enabled_commands,
         )
+        if not friendly_names:
+            return ""
         command_list = "\n".join(friendly_names)
         return f"Commands Available To Complete Task:\n{command_list}\n\n"
 
