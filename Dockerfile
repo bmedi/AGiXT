@@ -7,7 +7,8 @@ ENV PYTHONUNBUFFERED=1 \
     PLAYWRIGHT_BROWSERS_PATH=0 \
     HNSWLIB_NO_NATIVE=1 \
     PATH="/usr/local/bin:$PATH" \
-    LD_PRELOAD=libgomp.so.1
+    LD_PRELOAD=libgomp.so.1 \
+    LD_LIBRARY_PATH="/usr/local/lib64/:$LD_LIBRARY_PATH"
 
 # Install system packages
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

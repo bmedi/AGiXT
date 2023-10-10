@@ -444,7 +444,11 @@ class Interactions:
         try:
             self.response = await self.agent.instruct(formatted_prompt, tokens=tokens)
         except Exception as e:
-            logging.info(f"Error: {e}")
+            # Log the error with the full traceback for the provider
+            error = ""
+            for err in e:
+                error += f"{err.args}\n{err.name}\n{err.msg}\n"
+            logging.error(f"{self.agent.PROVIDER} Error: {error}")
             logging.info(f"PROMPT CONTENT: {formatted_prompt}")
             logging.info(f"TOKENS: {tokens}")
             self.failures += 1
@@ -456,7 +460,7 @@ class Interactions:
             time.sleep(10)
             if context_results > 0:
                 context_results = context_results - 1
-            self.response = ApiClient.prompt_agent(
+            return ApiClient.prompt_agent(
                 agent_name=self.agent_name,
                 prompt_name=prompt,
                 prompt_args={
@@ -467,13 +471,14 @@ class Interactions:
                     "user_input": user_input,
                     "context_results": context_results,
                     "conversation_name": conversation_name,
+                    "prompt_category": prompt_category,
                     **kwargs,
                 },
             )
         # Handle commands if the prompt contains the {COMMANDS} placeholder
         # We handle command injection that DOESN'T allow command execution by using {command_list} in the prompt
         if "{COMMANDS}" in unformatted_prompt:
-            await self.execution_agent(conversaton_name=conversation_name)
+            await self.execution_agent(conversation_name=conversation_name)
         logging.info(f"Response: {self.response}")
         if self.response != "" and self.response != None:
             if disable_memory != True:
@@ -505,6 +510,7 @@ class Interactions:
                         "context_results": context_results,
                         "conversation_name": conversation_name,
                         "disable_memory": disable_memory,
+                        "prompt_category": prompt_category,
                         **kwargs,
                     },
                 )
